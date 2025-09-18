@@ -3,17 +3,23 @@ import pandas as pd
 from PIL import Image
 import requests
 from io import BytesIO
+import os
 
 # --------- CONFIG ----------
 DECISIONS = ["Not Evaluated", "Yes", "No", "Not Sure"]
 BATCH_SIZE = 20
 # ----------------------------
 
+# chemin absolu basé sur l'emplacement du script
+BASE_DIR = os.path.dirname(__file__)
+CRED_PATH = os.path.join(BASE_DIR, "cred.csv")
+
+
 # --------- LOGIN ----------
 def login():
     st.title("🔑 Connexion")
 
-    creds = pd.read_csv("cred.csv")  # doit contenir user_id,password
+    creds = pd.read_csv(CRED_PATH)  # doit contenir user_id,password
     user = st.text_input("Identifiant")
     pwd = st.text_input("Mot de passe", type="password")
 
