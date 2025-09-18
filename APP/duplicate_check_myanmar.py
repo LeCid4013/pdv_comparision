@@ -13,7 +13,7 @@ BATCH_SIZE = 20
 def login():
     st.title("🔑 Connexion")
 
-    creds = pd.read_csv("id.csv")  # doit contenir user_id,password
+    creds = pd.read_csv("cred.csv")  # doit contenir user_id,password
     user = st.text_input("Identifiant")
     pwd = st.text_input("Mot de passe", type="password")
 
