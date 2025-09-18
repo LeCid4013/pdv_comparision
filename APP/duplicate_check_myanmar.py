@@ -4,186 +4,189 @@ from PIL import Image
 import requests
 from io import BytesIO
 
-# =========================
-# CONFIG
-# =========================
-BATCH_SIZE = 25
-RESULT_FILE = "resultats.csv"
-MAX_IMG_SIZE = (600, 600)  # Taille max Pillow
-DISPLAY_WIDTH = 400       # Largeur max pour l'affichage
+# --------- CONFIG ----------
+DECISIONS = ["Not Evaluated", "Yes", "No", "Not Sure"]
+BATCH_SIZE = 20
+# ----------------------------
 
-# =========================
-# FONCTIONS UTILES
-# =========================
-def preprocess_csv(df):
-    """Nettoie et prépare le fichier CSV selon tes règles"""
-    # Colonnes à supprimer
+# --------- LOGIN ----------
+def login():
+    st.title("🔑 Connexion")
+
+    creds = pd.read_csv("id.csv")  # doit contenir user_id,password
+    user = st.text_input("Identifiant")
+    pwd = st.text_input("Mot de passe", type="password")
+
+    if st.button("Se connecter"):
+        user_data = creds[(creds["user_id"] == user) & (creds["password"] == pwd)]
+        if not user_data.empty:
+            st.session_state["user"] = user
+            st.success(f"Bienvenue {user} ✅")
+            st.rerun()
+        else:
+            st.error("❌ Identifiant ou mot de passe incorrect")
+# ----------------------------
+
+# --------- IMAGE LOADER ----------
+@st.cache_data
+def load_and_resize_img(url, max_size=(400, 400)):
+    if not url or pd.isna(url) or url.strip() == "":
+        return None
+    try:
+        response = requests.get(url, timeout=10)
+        img = Image.open(BytesIO(response.content))
+        img.thumbnail(max_size)
+        return img
+    except Exception:
+        return None
+# ----------------------------
+
+# --------- MAIN APP ----------
+def app(user):
+    st.title("📸 Comparaison des PDV")
+
+    # bouton de déconnexion
+    if st.button("🚪 Déconnexion"):
+        del st.session_state["user"]
+        st.rerun()
+
+    # Upload du CSV principal
+    uploaded_file = st.file_uploader("📂 Charger le fichier CSV", type="csv")
+    if uploaded_file is None:
+        st.info("Veuillez charger un fichier CSV pour continuer.")
+        return
+
+    df = pd.read_csv(uploaded_file)
+
+    # Pré-traitement
     cols_to_drop = [
-        "Index", "Index Sum", "Assigned To", "Duplicate",
-        "name", "level_one", "level_two", "address", "haversine", "score"
+        "Index", "Index Sum", "Assigned To", "Duplicate", "name",
+        "level_one", "level_two", "address", "haversine", "score"
     ]
     df = df.drop(columns=[c for c in cols_to_drop if c in df.columns], errors="ignore")
 
-    # Renommer no_2 en unique_ref_2
     if "no_2" in df.columns:
         df = df.rename(columns={"no_2": "unique_ref_2"})
 
-    # Créer colonne concat
-    if "unique_ref_1" in df.columns and "unique_ref_2" in df.columns:
-        df["pair_id"] = df["unique_ref_1"].astype(str) + " - " + df["unique_ref_2"].astype(str)
+    df["pair_id"] = df["unique_ref_1"].astype(str) + " - " + df["unique_ref_2"].astype(str)
 
-    return df
+    # Initialiser les décisions si pas déjà fait
+    if "results_df" not in st.session_state:
+        st.session_state["results_df"] = pd.DataFrame({
+            "pair_id": df["pair_id"],
+            "decision": ["Not Evaluated"] * len(df)
+        })
 
+    results_df = st.session_state["results_df"]
 
-def load_results():
-    """Charge les résultats existants ou crée un DataFrame vide"""
-    if st.session_state.get("results_df") is not None:
-        return st.session_state.results_df
-    try:
-        df = pd.read_csv(RESULT_FILE)
-    except:
-        df = pd.DataFrame(columns=["pair_id", "decision"])
-    st.session_state.results_df = df
-    return df
+    # --------- PROGRESSION ----------
+    total_pairs = len(df)
+    done = (results_df["decision"] != "Not Evaluated").sum()
+    st.markdown(f"### ✅ Progression : {done} / {total_pairs}")
+    st.progress(done / total_pairs if total_pairs > 0 else 0)
+    # --------------------------------
 
+    # --------- PAGINATION ----------
+    total_pages = (total_pairs - 1) // BATCH_SIZE + 1
+    if "page" not in st.session_state:
+        st.session_state["page"] = 1
 
-def save_results(results_df):
-    """Sauvegarde les décisions dans CSV"""
-    
-    results_df.to_csv(RESULT_FILE, index=False)
-    st.session_state.results_df = results_df
+    page_top = st.number_input(
+        "Page",
+        min_value=1, max_value=total_pages,
+        value=st.session_state["page"],
+        key="page_top"
+    )
+    if page_top != st.session_state["page"]:
+        st.session_state["page"] = page_top
+        st.rerun()
 
+    start_idx = (st.session_state["page"] - 1) * BATCH_SIZE
+    end_idx = min(start_idx + BATCH_SIZE, total_pairs)
+    # --------------------------------
 
-@st.cache_data(show_spinner=False)
-def load_image_cached(url):
-    """Télécharge une image depuis URL et redimensionne"""
-    try:
-        if isinstance(url, str) and url.strip() != "":
-            response = requests.get(url, timeout=5)
-            if response.status_code == 200:
-                img = Image.open(BytesIO(response.content))
-                img.thumbnail(MAX_IMG_SIZE)
-                return img
-    except:
-        pass
-    return None
+    # --------- AFFICHAGE DES PAIRES ----------
+    for i in range(start_idx, end_idx):
+        row = df.iloc[i]
 
+        st.subheader(f"🔹 Paire {i+1}/{total_pairs} — {row['pair_id']}")
 
-# =========================
-# APPLICATION STREAMLIT
-# =========================
-st.set_page_config(page_title="Comparaison PDV", layout="wide")
-st.title("🖼️ Comparaison des Points de Vente (PDV)")
-
-# Upload CSV
-uploaded_file = st.file_uploader("Chargez le fichier CSV", type=["csv"])
-
-if uploaded_file:
-    df = pd.read_csv(uploaded_file)
-    df = preprocess_csv(df)
-    results_df = load_results()
-
-    # Pagination
-    total_rows = len(df)
-    total_pages = (total_rows // BATCH_SIZE) + (1 if total_rows % BATCH_SIZE != 0 else 0)
-    page = st.number_input("Page", min_value=1, max_value=total_pages, step=1)
-
-    start_idx = (page - 1) * BATCH_SIZE
-    end_idx = min(start_idx + BATCH_SIZE, total_rows)
-    st.write(f"Affichage des lignes {start_idx+1} à {end_idx} sur {total_rows}")
-
-    # Affichage batch
-    for i, row in df.iloc[start_idx:end_idx].iterrows():
-        pair_id = row["pair_id"]
-        st.markdown(f"### Paire: {pair_id}")
         col1, col2 = st.columns(2)
 
-        # -----------------------
-        # PDV1
-        # -----------------------
+        # ------ Colonne 1 ------
         with col1:
-            st.subheader(f"PDV1: {row['outlet_name_1']}")
+            st.markdown(f"**Outlet 01**")
+            st.write(f"**{row['outlet_name_1']}**")
+            st.write(f"{row['level_one_1']} - {row['level_two_1']}")
+            st.write(f"📞 {row['Telephone_1']}")
 
-            # Infos complémentaires
-            st.text(f"- 📍 Niveau 1 : {row.get('level_one_1', '')}")
-            st.text(f"- 🏢 Niveau 2 : {row.get('level_two_1', '')}")
-            st.text(f"- 🏢 Addresse : {row.get('address_1', '')}")
-            st.text(f"- ☎️ Téléphone : {row.get('Telephone_1', '')}")
-
-            img_in1 = load_image_cached(row.get('Picture Inside_1', None))
-            if img_in1:
-                st.image(img_in1, caption="Intérieur", width=DISPLAY_WIDTH)
+            st.write("🏪 Picture Outside")
+            img_out = load_and_resize_img(row.get("Picture Outside_1", ""))
+            if img_out is not None:
+                st.image(img_out, caption="Outside", use_container_width=True)
             else:
                 st.text("No img")
 
-            img_out1 = load_image_cached(row.get('Picture Outside_1', None))
-            if img_out1:
-                st.image(img_out1, caption="Extérieur", width=DISPLAY_WIDTH)
+            st.write("🏠 Picture Inside")
+            img_in = load_and_resize_img(row.get("Picture Inside_1", ""))
+            if img_in is not None:
+                st.image(img_in, caption="Inside", use_container_width=True)
             else:
                 st.text("No img")
 
-        # -----------------------
-        # PDV2
-        # -----------------------
+        # ------ Colonne 2 ------
         with col2:
-            st.subheader(f"PDV2: {row['outlet_name_2']}")
+            st.markdown(f"**Outlet 02**")
+            st.write(f"**{row['outlet_name_2']}**")
+            st.write(f"{row['level_one_2']} - {row['level_two_2']}")
+            st.write(f"📞 {row['Telephone_2']}")
 
-            # Infos complémentaires
-            st.text(f"- 📍 Niveau 1 : {row.get('level_one_2', '')}")
-            st.text(f"- 🏢 Niveau 2 : {row.get('level_two_2', '')}")
-            st.text(f"- 🏢 Addresse : {row.get('address_2', '')}")
-            st.text(f"- ☎️ Téléphone : {row.get('Telephone_2', '')}")
-
-            img_in2 = load_image_cached(row.get('Picture Inside_2', None))
-            if img_in2:
-                st.image(img_in2, caption="Intérieur", width=DISPLAY_WIDTH)
+            st.write("🏪 Picture Outside")
+            img_out = load_and_resize_img(row.get("Picture Outside_2", ""))
+            if img_out is not None:
+                st.image(img_out, caption="Outside", use_container_width=True)
             else:
                 st.text("No img")
 
-            img_out2 = load_image_cached(row.get('Picture Outside_2', None))
-            if img_out2:
-                st.image(img_out2, caption="Extérieur", width=DISPLAY_WIDTH)
+            st.write("🏠 Picture Inside")
+            img_in = load_and_resize_img(row.get("Picture Inside_2", ""))
+            if img_in is not None:
+                st.image(img_in, caption="Inside", use_container_width=True)
             else:
                 st.text("No img")
 
-        # -----------------------
-        # Choix utilisateur
-        # -----------------------
-        previous_decision = None
-        if pair_id in results_df["pair_id"].values:
-            previous_decision = results_df.loc[results_df["pair_id"] == pair_id, "decision"].values[0]
-
-        # key unique = pair_id + index i
-        decision_key = f"decision_{pair_id}_{i}"
+        # ------ Décision ------
+        key = f"decision_{row['pair_id']}_{user}"
+        current_decision = results_df.loc[results_df["pair_id"] == row["pair_id"], "decision"].values[0]
 
         decision = st.radio(
-            f"Décision pour la paire {pair_id}:",
-            ["Non évalué", "Yes", "No", "Not Sure"],
-            index=["Non évalué", "Yes", "No", "Not Sure"].index(previous_decision)
-            if previous_decision in ["Non évalué", "Yes", "No", "Not Sure"] else 0,
-            key=decision_key
+            "Votre décision :", DECISIONS, index=DECISIONS.index(current_decision),
+            key=key, horizontal=True
         )
-
-        # Sauvegarde immédiate
-        if pair_id in results_df["pair_id"].values:
-            results_df.loc[results_df["pair_id"] == pair_id, "decision"] = decision
-        else:
-            results_df = pd.concat(
-                [results_df, pd.DataFrame([{"pair_id": pair_id, "decision": decision}])],
-                ignore_index=True
-            )
+        results_df.loc[results_df["pair_id"] == row["pair_id"], "decision"] = decision
 
         st.markdown("---")
-        #st.write("### Résumé des décisions prises jusqu'à présent:")
 
-    # Sauvegarde finale
-    save_results(results_df)
-    st.success("Toutes vos décisions sont sauvegardées automatiquement dans resultats.csv ✅")
-
-    # Bouton pour télécharger le fichier des décisions
-    st.download_button(
-        label="📥 Télécharger les décisions",
-        data=results_df.to_csv(index=False).encode("utf-8"),
-        file_name="decisions.csv",
-        mime="text/csv"
+    # --------- PAGINATION EN BAS ----------
+    page_bottom = st.number_input(
+        "Page (bas)",
+        min_value=1, max_value=total_pages,
+        value=st.session_state["page"],
+        key="page_bottom"
     )
+    if page_bottom != st.session_state["page"]:
+        st.session_state["page"] = page_bottom
+        st.rerun()
+    # --------------------------------------
+
+    # Export
+    csv_export = results_df.to_csv(index=False).encode("utf-8")
+    st.download_button("💾 Télécharger les décisions", data=csv_export,
+                       file_name=f"decisions_{user}.csv", mime="text/csv")
+# ----------------------------
+
+# --------- ROUTAGE ----------
+if "user" not in st.session_state:
+    login()
+else:
+    app(st.session_state["user"])
