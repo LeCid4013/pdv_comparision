@@ -49,6 +49,7 @@ def load_results():
 
 def save_results(results_df):
     """Sauvegarde les décisions dans CSV"""
+    
     results_df.to_csv(RESULT_FILE, index=False)
     st.session_state.results_df = results_df
 
@@ -157,9 +158,9 @@ if uploaded_file:
 
         decision = st.radio(
             f"Décision pour la paire {pair_id}:",
-            ["Non évalué", "✅ Même PDV", "❌ Différent", "🤔 Incertain"],
-            index=["Non évalué", "✅ Même PDV", "❌ Différent", "🤔 Incertain"].index(previous_decision)
-            if previous_decision in ["Non évalué", "✅ Même PDV", "❌ Différent", "🤔 Incertain"] else 0,
+            ["Non évalué", "Yes", "No", "Not Sure"],
+            index=["Non évalué", "Yes", "No", "Not Sure"].index(previous_decision)
+            if previous_decision in ["Non évalué", "Yes", "No", "Not Sure"] else 0,
             key=decision_key
         )
 
